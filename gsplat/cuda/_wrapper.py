@@ -1652,6 +1652,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             Ks,
             conics,
             compensations,
+            radii,
         )
         ctx.width = width
         ctx.height = height
@@ -1694,6 +1695,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             Ks,
             conics,
             compensations,
+            radii,
         ) = ctx.saved_tensors
         width = ctx.width
         height = ctx.height
@@ -1780,13 +1782,67 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
 
+        # Compute Ks gradient by scattering packed grads to dense and calling fused_bwd
+        v_Ks = None
+        if ctx.needs_input_grad[5]:
+            batch_dims = means.shape[:-2]
+            N = means.shape[-2]
+            C = viewmats.shape[-3]
+            dense_shape_prefix = batch_dims + (C, N)
+
+            def _scatter_to_dense(packed_tensor, extra_dim=0):
+                if extra_dim > 0:
+                    shape = dense_shape_prefix + (extra_dim,)
+                else:
+                    shape = dense_shape_prefix
+                dense = torch.zeros(shape, device=means.device, dtype=packed_tensor.dtype)
+                idx = (batch_ids.long(), camera_ids.long(), gaussian_ids.long()) if len(batch_dims) > 0 else (camera_ids.long(), gaussian_ids.long())
+                dense[idx] = packed_tensor
+                return dense
+
+            v_means2d_dense = _scatter_to_dense(v_means2d.contiguous(), extra_dim=2)
+            v_depths_dense = _scatter_to_dense(v_depths.contiguous())
+            v_conics_dense = _scatter_to_dense(v_conics.contiguous(), extra_dim=3)
+            conics_dense = _scatter_to_dense(conics, extra_dim=3)
+            radii_dense = _scatter_to_dense(radii, extra_dim=2)
+            v_comp_dense = None
+            comp_dense = None
+            if compensations is not None:
+                comp_dense = _scatter_to_dense(compensations)
+                if v_compensations is not None:
+                    v_comp_dense = _scatter_to_dense(v_compensations)
+
+            _, _, _, _, _, v_Ks = _make_lazy_cuda_func(
+                "projection_ewa_3dgs_fused_bwd"
+            )(
+                means,
+                covars,
+                quats,
+                scales,
+                viewmats,
+                Ks,
+                width,
+                height,
+                eps2d,
+                camera_model_type,
+                radii_dense,
+                conics_dense,
+                comp_dense,
+                v_means2d_dense,
+                v_depths_dense,
+                v_conics_dense,
+                v_comp_dense,
+                False,  # viewmats_requires_grad (already computed above)
+                True,   # Ks_requires_grad
+            )
+
         return (
             v_means,
             v_covars,
             v_quats,
             v_scales,
             v_viewmats,
-            None,
+            v_Ks,
             None,
             None,
             None,
