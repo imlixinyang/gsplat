@@ -742,29 +742,27 @@ inline __device__ void persp_proj_vjp(
     mat3x2 v_J = v_cov2d * J * glm::transpose(cov3d) +
                  glm::transpose(v_cov2d) * J * cov3d;
 
-    // Gradients w.r.t. intrinsics from Jacobian elements
-    // J = [fx*rz, 0; 0, fy*rz; -fx*tx*rz2, -fy*ty*rz2]
-    v_fx += rz * v_J[0][0] - tx * rz2 * v_J[2][0];
-    v_fy += rz * v_J[1][1] - ty * rz2 * v_J[2][1];
-
-    // Additional gradients from fov clipping limits
-    // The clipping limits depend on fx, fy, cx, cy but for simplicity
-    // we'll ignore these higher-order effects for now
-
-    // fov clipping
+    // fov clipping with correct intrinsics gradient routing
     if (x * rz <= lim_x_pos && x * rz >= -lim_x_neg) {
         v_mean3d.x += -fx * rz2 * v_J[2][0];
+        v_fx -= tx * rz2 * v_J[2][0];
     } else {
         v_mean3d.z += -fx * rz3 * v_J[2][0] * tx;
+        v_cx += rz * v_J[2][0];
     }
     if (y * rz <= lim_y_pos && y * rz >= -lim_y_neg) {
         v_mean3d.y += -fy * rz2 * v_J[2][1];
+        v_fy -= ty * rz2 * v_J[2][1];
     } else {
         v_mean3d.z += -fy * rz3 * v_J[2][1] * ty;
+        v_cy += rz * v_J[2][1];
     }
     v_mean3d.z += -fx * rz2 * v_J[0][0] - fy * rz2 * v_J[1][1] +
                   2.f * fx * tx * rz3 * v_J[2][0] +
                   2.f * fy * ty * rz3 * v_J[2][1];
+
+    v_fx += rz * v_J[0][0];
+    v_fy += rz * v_J[1][1];
 }
 
 inline __device__ void fisheye_proj(
