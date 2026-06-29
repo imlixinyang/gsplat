@@ -139,12 +139,14 @@ void launch_projection_ewa_3dgs_fused_bwd_kernel(
     const at::Tensor v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> v_compensations, // [..., C, N] optional
     const bool viewmats_requires_grad,
+    const bool Ks_requires_grad,
     // outputs
     at::Tensor v_means,   // [..., N, 3]
     at::Tensor v_covars,  // [..., N, 3, 3]
     at::Tensor v_quats,   // [..., N, 4]
     at::Tensor v_scales,  // [..., N, 3]
-    at::Tensor v_viewmats // [..., C, 4, 4]
+    at::Tensor v_viewmats, // [..., C, 4, 4]
+    at::Tensor v_Ks        // [..., C, 3, 3]
 );
 
 void launch_projection_ewa_3dgs_packed_fwd_kernel(

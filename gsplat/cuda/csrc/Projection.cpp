@@ -213,7 +213,7 @@ projection_ewa_3dgs_fused_fwd(
     return std::make_tuple(radii, means2d, depths, conics, compensations);
 }
 
-std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
+std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
 projection_ewa_3dgs_fused_bwd(
     // fwd inputs
     const at::Tensor &means,                // [..., N, 3]
@@ -235,7 +235,8 @@ projection_ewa_3dgs_fused_bwd(
     const at::Tensor &v_depths,                      // [..., C, N]
     const at::Tensor &v_conics,                      // [..., C, N, 3]
     const at::optional<at::Tensor> &v_compensations, // [..., C, N] optional
-    bool viewmats_requires_grad
+    bool viewmats_requires_grad,
+    bool Ks_requires_grad
 ) {
     DEVICE_GUARD(means);
     CHECK_INPUT(means);
@@ -273,6 +274,10 @@ projection_ewa_3dgs_fused_bwd(
     if (viewmats_requires_grad) {
         v_viewmats = at::zeros_like(viewmats);
     }
+    at::Tensor v_Ks;
+    if (Ks_requires_grad) {
+        v_Ks = at::zeros_like(Ks);
+    }
 
     launch_projection_ewa_3dgs_fused_bwd_kernel(
         // inputs
@@ -294,15 +299,17 @@ projection_ewa_3dgs_fused_bwd(
         v_conics,
         v_compensations,
         viewmats_requires_grad,
+        Ks_requires_grad,
         // outputs
         v_means,
         v_covars,
         v_quats,
         v_scales,
-        v_viewmats
+        v_viewmats,
+        v_Ks
     );
 
-    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats);
+    return std::make_tuple(v_means, v_covars, v_quats, v_scales, v_viewmats, v_Ks);
 }
 
 std::tuple<

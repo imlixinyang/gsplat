@@ -1762,7 +1762,7 @@ class _FullyFusedProjection(torch.autograd.Function):
         camera_model_type = ctx.camera_model_type
         if v_compensations is not None:
             v_compensations = v_compensations.contiguous()
-        v_means, v_covars, v_quats, v_scales, v_viewmats = _make_lazy_cuda_func(
+        v_means, v_covars, v_quats, v_scales, v_viewmats, v_Ks = _make_lazy_cuda_func(
             "projection_ewa_3dgs_fused_bwd"
         )(
             means,
@@ -1783,6 +1783,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_conics.contiguous(),
             v_compensations,
             ctx.needs_input_grad[4],  # viewmats_requires_grad
+            ctx.needs_input_grad[5],  # Ks_requires_grad
         )
         if not ctx.needs_input_grad[0]:
             v_means = None
@@ -1794,13 +1795,15 @@ class _FullyFusedProjection(torch.autograd.Function):
             v_scales = None
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
+        if not ctx.needs_input_grad[5]:
+            v_Ks = None
         return (
             v_means,
             v_covars,
             v_quats,
             v_scales,
             v_viewmats,
-            None,  # Ks
+            v_Ks,
             None,  # width
             None,  # height
             None,  # eps2d
@@ -1809,8 +1812,7 @@ class _FullyFusedProjection(torch.autograd.Function):
             None,  # radius_clip
             None,  # calc_compensations
             None,  # camera_model
-            None,  # ut_params
-            None,  # radial_coeffs
+            None,  # opacities
         )
 
 
@@ -2128,6 +2130,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             scales,
             viewmats,
             Ks,
+            radii,
             conics,
             compensations,
         )
@@ -2173,6 +2176,7 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
             scales,
             viewmats,
             Ks,
+            radii,
             conics,
             compensations,
         ) = ctx.saved_tensors
@@ -2261,13 +2265,72 @@ class _FullyFusedProjectionPacked(torch.autograd.Function):
         if not ctx.needs_input_grad[4]:
             v_viewmats = None
 
+        v_Ks = None
+        if ctx.needs_input_grad[5]:
+            batch_dims = means.shape[:-2]
+            B = math.prod(batch_dims)
+            C = viewmats.shape[-3]
+            N = means.shape[-2]
+
+            def _scatter_to_dense(packed_tensor, extra_shape=()):
+                dense_flat = torch.zeros(
+                    (B, C, N) + tuple(extra_shape),
+                    device=means.device,
+                    dtype=packed_tensor.dtype,
+                )
+                dense_flat[
+                    batch_ids.long(),
+                    camera_ids.long(),
+                    gaussian_ids.long(),
+                ] = packed_tensor
+                return dense_flat.reshape(batch_dims + (C, N) + tuple(extra_shape))
+
+            radii_dense = _scatter_to_dense(radii, (2,))
+            conics_dense = _scatter_to_dense(conics, (3,))
+            v_means2d_dense = _scatter_to_dense(v_means2d.contiguous(), (2,))
+            v_depths_dense = _scatter_to_dense(v_depths.contiguous())
+            v_conics_dense = _scatter_to_dense(v_conics.contiguous(), (3,))
+
+            compensations_dense = None
+            v_compensations_dense = None
+            if compensations is not None:
+                compensations_dense = _scatter_to_dense(compensations)
+                if v_compensations is not None:
+                    v_compensations_dense = _scatter_to_dense(
+                        v_compensations.contiguous()
+                    )
+
+            _, _, _, _, _, v_Ks = _make_lazy_cuda_func(
+                "projection_ewa_3dgs_fused_bwd"
+            )(
+                means,
+                covars,
+                quats,
+                scales,
+                viewmats,
+                Ks,
+                width,
+                height,
+                eps2d,
+                camera_model_type,
+                radii_dense,
+                conics_dense,
+                compensations_dense,
+                v_means2d_dense,
+                v_depths_dense,
+                v_conics_dense,
+                v_compensations_dense,
+                False,  # viewmats_requires_grad; packed path already computed it.
+                True,  # Ks_requires_grad
+            )
+
         return (
             v_means,
             v_covars,
             v_quats,
             v_scales,
             v_viewmats,
-            None,  # Ks
+            v_Ks,
             None,  # width
             None,  # height
             None,  # eps2d
